@@ -12,6 +12,30 @@ ACTION_RULES = {"提交执行": "待执行", "暂停任务": "执行中", "恢�
 NEGATIVE_ACTIONS = []
 
 
+def _schedule_state(row: dict[str, Any]) -> dict[str, Any]:
+    """按关联抓取规则的实时状态推导可调度标记与阻断原因。
+
+    只在读取时叠加在副本上，不回写任务记录本身，历史已执行结果保持不变。
+    """
+    item = dict(row)
+    code = str(row.get("关联规则") or "").strip()
+    item["可调度"] = "是"
+    item["阻断原因"] = ""
+    if not code:
+        return item
+    rule = next(
+        (entry for entry in store.rows("website") if str(entry.get("规则编号", "")) == code),
+        None,
+    )
+    if rule is None:
+        item["可调度"] = "否"
+        item["阻断原因"] = f"关联规则 {code} 不存在或已归档，任务调度被阻断"
+    elif rule.get("status") != "已启用":
+        item["可调度"] = "否"
+        item["阻断原因"] = f"关联规则 {code} 当前状态为「{rule.get('status')}」，任务调度被阻断"
+    return item
+
+
 class TaskService:
     def list_entries(
         self,
@@ -28,10 +52,13 @@ class TaskService:
             rows = [row for row in rows if row.get("status") == status]
         total = len(rows)
         start = max(page - 1, 0) * size
-        return rows[start:start + size], total
+        return [_schedule_state(row) for row in rows[start:start + size]], total
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
-        return store.find(MODULE, entry_id)
+        row = store.find(MODULE, entry_id)
+        if row is None:
+            return None
+        return _schedule_state(row)
 
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]

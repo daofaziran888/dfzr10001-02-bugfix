@@ -20,14 +20,38 @@ STATUSES = ["草稿", "待校验", "已启用", "已停用"]
 def list_entries(
     keyword: str | None = Query(default=None, description="按规则编号检索"),
     status: str | None = Query(default=None, description="草稿、待校验、已启用、已停用"),
+    site: str | None = Query(default=None, description="按目标站点检索"),
+    selector: str | None = Query(default=None, description="按列表选择器检索"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
-    """按规则编号与状态过滤网页抓取规则列表；没有数据时返回空页，不报错。"""
+    """按规则编号、状态、目标站点与列表选择器过滤网页抓取规则列表；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
+    items, total = service.list_entries(
+        keyword=keyword, status=status, site=site, selector=selector, page=page, size=size
+    )
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+# 注意：/export 必须注册在 /{entry_id} 之前，否则会被详情路由截获。
+@router.get("/export")
+def export_entries(
+    keyword: str | None = Query(default=None, description="按规则编号检索"),
+    status: str | None = Query(default=None, description="草稿、待校验、已启用、已停用"),
+    site: str | None = Query(default=None, description="按目标站点检索"),
+    selector: str | None = Query(default=None, description="按列表选择器检索"),
+) -> dict[str, Any]:
+    """导出网页抓取规则清单：与列表页共用同一套过滤条件，导出条数与列表条数一致。"""
+    items, total = service.list_entries(
+        keyword=keyword, status=status, site=site, selector=selector, page=1, size=10000
+    )
+    filters = {
+        key: value
+        for key, value in {"keyword": keyword, "status": status, "site": site, "selector": selector}.items()
+        if value
+    }
+    return {"module": "website", "total": total, "filters": filters, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -50,16 +74,9 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条抓取规则执行提交校验、启用配置、停用配置；不允许的动作会被拦下并说明原因。"""
+    """对单条抓取规则执行提交校验、启用配置、停用配置；状态只能单向推进，越级动作会被拦下并说明原因。"""
     action = str(payload.values.get("action") or "").strip()
     entry, message = service.run_action(entry_id, action)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出网页抓取规则清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "website", "total": total, "items": items}

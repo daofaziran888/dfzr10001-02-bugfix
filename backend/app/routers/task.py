@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/task", tags=["采集任务"])
 
 service = TaskService()
 
-LIST_FIELDS = ["任务编号", "任务名称", "关联源端", "采集频率", "增量字段", "起始水位", "批次大小", "执行窗口"]
+LIST_FIELDS = ["任务编号", "任务名称", "关联源端", "关联规则", "采集频率", "增量字段", "起始水位", "批次大小", "执行窗口"]
 STATUSES = ["草稿", "待执行", "执行中", "已完成"]
 
 
@@ -28,6 +28,18 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+# 注意：/export 必须注册在 /{entry_id} 之前，否则会被详情路由截获。
+@router.get("/export")
+def export_entries(
+    keyword: str | None = Query(default=None, description="按任务编号检索"),
+    status: str | None = Query(default=None, description="草稿、待执行、执行中、已完成"),
+) -> dict[str, Any]:
+    """导出采集任务清单：与列表页共用同一套过滤条件，导出条数与列表条数一致。"""
+    items, total = service.list_entries(keyword=keyword, status=status, page=1, size=10000)
+    filters = {key: value for key, value in {"keyword": keyword, "status": status}.items() if value}
+    return {"module": "task", "total": total, "filters": filters, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -56,10 +68,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出采集任务清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "task", "total": total, "items": items}
